@@ -9,6 +9,7 @@ import edu.berkeley.cs186.database.memory.BufferManager;
 import edu.berkeley.cs186.database.memory.Page;
 import edu.berkeley.cs186.database.table.RecordId;
 
+import javax.xml.crypto.Data;
 import java.nio.ByteBuffer;
 import java.util.*;
 
@@ -154,13 +155,7 @@ class LeafNode extends BPlusNode {
     public LeafNode getLeftmostLeaf() {
         return this;
     }
-
-    // See BPlusNode.put.
-    @Override
-    public Optional<Pair<DataBox, Long>> put(DataBox key, RecordId rid) {
-        if (keys.contains(key)) {
-            throw new BPlusTreeException("key alr exists");
-        }
+    private int getIndex(DataBox key) {
         int i = 0;
         while (i < keys.size()) {
             DataBox curr_key = keys.get(i);
@@ -170,31 +165,28 @@ class LeafNode extends BPlusNode {
             }
             i += 1;
         }
-        keys.add(i, key);
-        rids.add(i, rid);
+        return i;
+    }
+    // See BPlusNode.put.
+    @Override
+    public Optional<Pair<DataBox, Long>> put(DataBox key, RecordId rid) {
+        if (keys.contains(key)) {
+            throw new BPlusTreeException("key alr exists");
+        }
+        int index = getIndex(key);
+        keys.add(index, key);
+        rids.add(index, rid);
 
         if (keys.size() <= metadata.getOrder() * 2) {    //node isn't overfilled
             sync();
             return Optional.empty();
         }
-        ArrayList<DataBox> new_key_lst = new ArrayList<>();
-        ArrayList<RecordId> new_rids_lst = new ArrayList<>();
-
         int half = keys.size() / 2;
-        int index = 0;
-        for (; half < keys.size(); half++) {
-            new_key_lst.add(index, keys.get(half));
-            new_rids_lst.add(index, rids.get(half));
-            index += 1;
-        }
-        new_rids_lst.add(index, rids.get(half));
-        half = keys.size() / 2;
-        index = keys.size() - 1;
-        while (keys.size() != half) {
-            keys.remove(index);
-            rids.remove(index+1);
-        }
-        rids.remove(index);
+        List<DataBox> new_key_lst = keys.subList(half, keys.size());
+        List<RecordId> new_rids_lst = rids.subList(half, rids.size());
+
+        keys = keys.subList(0, half);
+        rids = rids.subList(0, half);
 
         LeafNode new_node = new LeafNode(metadata, bufferManager, new_key_lst, new_rids_lst, this.rightSibling, treeContext);
         Long new_node_page_id = new_node.page.getPageNum();
@@ -208,9 +200,42 @@ class LeafNode extends BPlusNode {
     @Override
     public Optional<Pair<DataBox, Long>> bulkLoad(Iterator<Pair<DataBox, RecordId>> data,
             float fillFactor) {
-        // TODO(proj2): implement
+        Pair<DataBox, RecordId> next;
+        DataBox key;
+        RecordId rid;
+        double max_size = Math.ceil(2 * metadata.getOrder() * fillFactor);
+        while (keys.size() + 1 <= max_size) {
+            if (!data.hasNext()) {
+                break;
+            }
+            next = data.next();
+            key = next.getFirst();
+            rid = next.getSecond();
+            keys.add(key);
+            rids.add(rid);
+        }
+        if (!data.hasNext()) {
+            sync();
+            return Optional.empty();
+        }
+        next = data.next();
+        key = next.getFirst();
+        rid = next.getSecond();
 
-        return Optional.empty();
+        List<DataBox> new_key_lst = new ArrayList<>();
+        new_key_lst.add(key);
+
+        List<RecordId> new_rid_lst = new ArrayList<>();
+        new_rid_lst.add(rid);
+
+        //might have to change right sibling of new node to be current right sibling but idt it should matter tehcnically
+        LeafNode sibling = new LeafNode(metadata, bufferManager, new_key_lst, new_rid_lst, Optional.empty(), treeContext);
+        Long sibling_page_id = sibling.page.getPageNum();
+        rightSibling = Optional.of(sibling_page_id);
+        sync();
+        sibling.sync();
+        return Optional.of(new Pair<>(key, sibling_page_id));
+
     }
 
     // See BPlusNode.remove.

@@ -109,9 +109,6 @@ class InnerNode extends BPlusNode {
     // See BPlusNode.put.
     @Override
     public Optional<Pair<DataBox, Long>> put(DataBox key, RecordId rid) {
-        if (keys.contains(key)) {
-            throw new BPlusTreeException("key alr exists");
-        }
         boolean seen = false;
         Optional<Pair<DataBox, Long>> split_up = Optional.empty();
         for (int i = 0; i < keys.size(); i++) {
@@ -126,6 +123,7 @@ class InnerNode extends BPlusNode {
         if (!seen) {
             split_up = this.getChild(keys.size()).put(key, rid);
         }
+
         if (split_up.isPresent()) {
 
 //            could binary search to find pos instead for log(2*d) time instead of O(2d)
@@ -135,57 +133,79 @@ class InnerNode extends BPlusNode {
             while (i < keys.size()) {
                 DataBox curr_key = keys.get(i);
                 int cmp = key.compareTo(curr_key);
-                if (cmp < 0) {
+                if (cmp <= 0) {
                     break;
                 }
                 i += 1;
             }
             keys.add(i, split_key);
-            children.add(i, split_page_id);
-            if (keys.size() >= 2 * metadata.getOrder() * 2) {
-                ArrayList<DataBox> new_key_lst = new ArrayList<>();
-                ArrayList<Long> new_childrens_lst = new ArrayList<>();
+            children.add(i+1, split_page_id);
+            if (keys.size() > 2 * metadata.getOrder()) {
                 int half = keys.size() / 2;
-                DataBox new_split_key = keys.get(half);
-                half += 1;
-                int index = 0;
-                for (; half < keys.size(); half++) {
-                    new_key_lst.add(index, keys.get(half));
-                    new_childrens_lst.add(index, children.get(half));
-                    index += 1;
-                }
-                new_childrens_lst.add(index, children.get(half));
-                half = keys.size() / 2;
-                index = keys.size() - 1;
-                while (keys.size() != half) {
-                    keys.remove(index);
-                    children.remove(index+1);
-                }
-                children.remove(index);
-//                InnerNode(BPlusTreeMetadata metadata, BufferManager bufferManager, List<DataBox> keys,
-//                        List<Long> children, LockContext treeContext) {
-//                    this(metadata, bufferManager, bufferManager.fetchNewPage(treeContext, metadata.getPartNum()),
-//                            keys, children, treeContext);
-//                }
-                InnerNode split_node = new InnerNode(metadata, bufferManager, new_key_lst, new_childrens_lst, treeContext);
-                split_node.sync();
-                sync();
-                return Optional.of(new Pair<>(new_split_key, split_node.page.getPageNum()));
+                List<DataBox> new_key_lst = keys.subList(half+1, keys.size());
+                List<Long> new_child_lst = children.subList(half+1, keys.size() + 1);
 
+                DataBox new_split_key = keys.get(half);
+
+                keys = keys.subList(0, half);
+                children = children.subList(0, half+1);
+                InnerNode split_node = new InnerNode(metadata, bufferManager, new_key_lst, new_child_lst, treeContext);
+                sync();
+                split_node.sync();
+                return Optional.of(new Pair<>(new_split_key, split_node.page.getPageNum()));
             }
 
         }
         sync();
         return Optional.empty();
     }
+    private int getIndex(DataBox key) {
+        int i = 0;
+        while (i < keys.size()) {
+            DataBox curr_key = keys.get(i);
+            int cmp = key.compareTo(curr_key);
+            if (cmp < 0) {
+                break;
+            }
+            i += 1;
+        }
+        return i;
+    }
 
     // See BPlusNode.bulkLoad.
     @Override
     public Optional<Pair<DataBox, Long>> bulkLoad(Iterator<Pair<DataBox, RecordId>> data,
             float fillFactor) {
-        // TODO(proj2): implement
+        while (children.size() < (2 * metadata.getOrder() + 1)) {
+            if (!data.hasNext()) {
+                break;
+            }
+            Optional<Pair<DataBox, Long>> split_node = getChild(children.size() - 1).bulkLoad(data, fillFactor);
+            if (split_node.isPresent()) {
+                DataBox key = split_node.get().getFirst();
+                Long child_id = split_node.get().getSecond();
+                children.add(child_id);
+                keys.add(key);
+            }
 
-        return Optional.empty();
+        }
+        if (!data.hasNext()) {
+            sync();
+            return Optional.empty();
+        }
+
+        int half = keys.size() / 2;
+        List<DataBox> new_key_lst = keys.subList(half+1, keys.size());
+        List<Long> new_child_lst = children.subList(half+1, keys.size() + 1);
+
+        DataBox new_split_key = keys.get(half);
+
+        keys = keys.subList(0, half);
+        children = children.subList(0, half+1);
+        InnerNode new_node = new InnerNode(metadata, bufferManager, new_key_lst, new_child_lst, treeContext);
+        sync();
+        new_node.sync();
+        return Optional.of(new Pair<>(new_split_key, new_node.page.getPageNum()));
     }
 
     // See BPlusNode.remove.

@@ -246,6 +246,7 @@ public class TestInnerNode {
         rids0.add(0, rid);
         checkTreeMatchesExpectations();
 
+
         // Add to leaf 1.
         key = new IntDataBox(14);
         rid = new RecordId(14, (short) 14);
@@ -254,13 +255,17 @@ public class TestInnerNode {
         rids1.add(3, rid);
         checkTreeMatchesExpectations();
 
+
         // Add to leaf 2.
         key = new IntDataBox(20);
         rid = new RecordId(20, (short) 20);
+
         assertEquals(Optional.empty(), inner.put(key, rid));
         keys2.add(0, key);
         rids2.add(0, rid);
+
         checkTreeMatchesExpectations();
+
     }
 
     @Test
