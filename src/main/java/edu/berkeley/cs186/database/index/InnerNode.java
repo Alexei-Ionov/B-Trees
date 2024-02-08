@@ -1,5 +1,6 @@
 package edu.berkeley.cs186.database.index;
 
+import edu.berkeley.cs186.database.cli.parser.Node;
 import edu.berkeley.cs186.database.common.Buffer;
 import edu.berkeley.cs186.database.common.Pair;
 import edu.berkeley.cs186.database.concurrency.LockContext;
@@ -9,7 +10,9 @@ import edu.berkeley.cs186.database.memory.BufferManager;
 import edu.berkeley.cs186.database.memory.Page;
 import edu.berkeley.cs186.database.table.RecordId;
 
+import javax.xml.crypto.Data;
 import java.nio.ByteBuffer;
+import java.security.Key;
 import java.util.*;
 
 /**
@@ -80,25 +83,99 @@ class InnerNode extends BPlusNode {
     // See BPlusNode.get.
     @Override
     public LeafNode get(DataBox key) {
-        // TODO(proj2): implement
+        List<DataBox> keys = this.keys;
 
-        return null;
+        for (int i = 0; i < keys.size(); i++) {
+            DataBox curr_key = keys.get(i);
+            int cmp = key.compareTo(curr_key);
+            if (cmp < 0) {
+                return this.getChild(i).get(key);
+            }
+        }
+
+        return this.getChild(keys.size()).get(key);
+
+
     }
 
     // See BPlusNode.getLeftmostLeaf.
     @Override
     public LeafNode getLeftmostLeaf() {
         assert(children.size() > 0);
-        // TODO(proj2): implement
-
-        return null;
+        return getChild(0).getLeftmostLeaf();
     }
+
 
     // See BPlusNode.put.
     @Override
     public Optional<Pair<DataBox, Long>> put(DataBox key, RecordId rid) {
-        // TODO(proj2): implement
+        if (keys.contains(key)) {
+            throw new BPlusTreeException("key alr exists");
+        }
+        boolean seen = false;
+        Optional<Pair<DataBox, Long>> split_up = Optional.empty();
+        for (int i = 0; i < keys.size(); i++) {
+            DataBox curr_key = keys.get(i);
+            int cmp = key.compareTo(curr_key);
+            if (cmp < 0) {
+                split_up = this.getChild(i).put(key, rid);
+                seen = true;
+                break;
+            }
+        }
+        if (!seen) {
+            split_up = this.getChild(keys.size()).put(key, rid);
+        }
+        if (split_up.isPresent()) {
 
+//            could binary search to find pos instead for log(2*d) time instead of O(2d)
+            DataBox split_key = split_up.get().getFirst();
+            Long split_page_id = split_up.get().getSecond();
+            int i = 0;
+            while (i < keys.size()) {
+                DataBox curr_key = keys.get(i);
+                int cmp = key.compareTo(curr_key);
+                if (cmp < 0) {
+                    break;
+                }
+                i += 1;
+            }
+            keys.add(i, split_key);
+            children.add(i, split_page_id);
+            if (keys.size() >= 2 * metadata.getOrder() * 2) {
+                ArrayList<DataBox> new_key_lst = new ArrayList<>();
+                ArrayList<Long> new_childrens_lst = new ArrayList<>();
+                int half = keys.size() / 2;
+                DataBox new_split_key = keys.get(half);
+                half += 1;
+                int index = 0;
+                for (; half < keys.size(); half++) {
+                    new_key_lst.add(index, keys.get(half));
+                    new_childrens_lst.add(index, children.get(half));
+                    index += 1;
+                }
+                new_childrens_lst.add(index, children.get(half));
+                half = keys.size() / 2;
+                index = keys.size() - 1;
+                while (keys.size() != half) {
+                    keys.remove(index);
+                    children.remove(index+1);
+                }
+                children.remove(index);
+//                InnerNode(BPlusTreeMetadata metadata, BufferManager bufferManager, List<DataBox> keys,
+//                        List<Long> children, LockContext treeContext) {
+//                    this(metadata, bufferManager, bufferManager.fetchNewPage(treeContext, metadata.getPartNum()),
+//                            keys, children, treeContext);
+//                }
+                InnerNode split_node = new InnerNode(metadata, bufferManager, new_key_lst, new_childrens_lst, treeContext);
+                split_node.sync();
+                sync();
+                return Optional.of(new Pair<>(new_split_key, split_node.page.getPageNum()));
+
+            }
+
+        }
+        sync();
         return Optional.empty();
     }
 
@@ -114,9 +191,21 @@ class InnerNode extends BPlusNode {
     // See BPlusNode.remove.
     @Override
     public void remove(DataBox key) {
-        // TODO(proj2): implement
 
-        return;
+        boolean seen = false;
+        for (int i = 0; i < keys.size(); i++) {
+            DataBox curr_key = keys.get(i);
+            int cmp = key.compareTo(curr_key);
+            if (cmp < 0) {
+                this.getChild(i).remove(key);
+                seen = true;
+                break;
+            }
+        }
+        if (!seen) {
+            this.getChild(keys.size()).remove(key);
+        }
+
     }
 
     // Helpers /////////////////////////////////////////////////////////////////

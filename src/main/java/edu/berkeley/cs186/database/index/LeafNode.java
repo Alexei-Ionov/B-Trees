@@ -146,25 +146,62 @@ class LeafNode extends BPlusNode {
     // See BPlusNode.get.
     @Override
     public LeafNode get(DataBox key) {
-        // TODO(proj2): implement
-
-        return null;
+        return this;
     }
 
     // See BPlusNode.getLeftmostLeaf.
     @Override
     public LeafNode getLeftmostLeaf() {
-        // TODO(proj2): implement
-
-        return null;
+        return this;
     }
 
     // See BPlusNode.put.
     @Override
     public Optional<Pair<DataBox, Long>> put(DataBox key, RecordId rid) {
-        // TODO(proj2): implement
+        if (keys.contains(key)) {
+            throw new BPlusTreeException("key alr exists");
+        }
+        int i = 0;
+        while (i < keys.size()) {
+            DataBox curr_key = keys.get(i);
+            int cmp = key.compareTo(curr_key);
+            if (cmp < 0) {
+                break;
+            }
+            i += 1;
+        }
+        keys.add(i, key);
+        rids.add(i, rid);
 
-        return Optional.empty();
+        if (keys.size() <= metadata.getOrder() * 2) {    //node isn't overfilled
+            sync();
+            return Optional.empty();
+        }
+        ArrayList<DataBox> new_key_lst = new ArrayList<>();
+        ArrayList<RecordId> new_rids_lst = new ArrayList<>();
+
+        int half = keys.size() / 2;
+        int index = 0;
+        for (; half < keys.size(); half++) {
+            new_key_lst.add(index, keys.get(half));
+            new_rids_lst.add(index, rids.get(half));
+            index += 1;
+        }
+        new_rids_lst.add(index, rids.get(half));
+        half = keys.size() / 2;
+        index = keys.size() - 1;
+        while (keys.size() != half) {
+            keys.remove(index);
+            rids.remove(index+1);
+        }
+        rids.remove(index);
+
+        LeafNode new_node = new LeafNode(metadata, bufferManager, new_key_lst, new_rids_lst, this.rightSibling, treeContext);
+        Long new_node_page_id = new_node.page.getPageNum();
+        this.rightSibling = Optional.of(new_node_page_id);
+        new_node.sync();
+        sync();
+        return Optional.of(new Pair<>(new_key_lst.get(0), new_node_page_id));
     }
 
     // See BPlusNode.bulkLoad.
@@ -179,9 +216,16 @@ class LeafNode extends BPlusNode {
     // See BPlusNode.remove.
     @Override
     public void remove(DataBox key) {
-        // TODO(proj2): implement
-
-        return;
+        for (int i = 0; i < keys.size(); i++) {
+            DataBox curr_key = keys.get(i);
+            int cmp = key.compareTo(curr_key);
+            if (cmp == 0) {
+                keys.remove(i);
+                rids.remove(i);
+                sync();
+                break;
+            }
+        }
     }
 
     // Iterators ///////////////////////////////////////////////////////////////
@@ -342,7 +386,7 @@ class LeafNode extends BPlusNode {
         //     a               b                   c                         d
         //
         // represent a leaf node with sibling on page 4 and a single (key, rid)
-        // pair with key 3 and page id (3, 1).
+        // pair with key 3 and rid (3, 1).
 
         assert (keys.size() == rids.size());
         assert (keys.size() <= 2 * metadata.getOrder());
@@ -377,7 +421,46 @@ class LeafNode extends BPlusNode {
         // use the constructor that reuses an existing page instead of fetching a
         // brand new one.
 
-        return null;
+        /*
+         a. the literal value 1 (1 byte) which indicates that this node is a
+        //      leaf node,
+        //   b. the page id (8 bytes) of our right sibling (or -1 if we don't have
+        //      a right sibling),
+        //   c. the number (4 bytes) of (key, rid) pairs this leaf node contains,
+        //      and
+        //   d. the (key, rid) pairs themselves.
+
+         LeafNode(BPlusTreeMetadata metadata, BufferManager bufferManager, Page page,
+                     List<DataBox> keys,
+                     List<RecordId> rids, Optional<Long> rightSibling, LockContext treeContext) {
+
+    }
+         */
+        Page page = bufferManager.fetchPage(treeContext, pageNum);  //does this get new page?
+        Buffer buf = page.getBuffer();
+
+        byte nodeType = buf.get();
+        assert(nodeType == (byte) 1);
+
+        long right_page_id = buf.getLong();
+        Optional<Long> sibling;
+        if (right_page_id == -1) {
+            sibling = Optional.empty();
+        } else {
+            sibling = Optional.of(right_page_id);
+        }
+        int n = buf.getInt();
+
+        List<DataBox> keys = new ArrayList<>();
+        List<RecordId> rids = new ArrayList<>();
+
+        for (int i = 0; i < n; ++i) {
+            keys.add(DataBox.fromBytes(buf, metadata.getKeySchema()));
+            rids.add(RecordId.fromBytes(buf));
+        }
+
+
+        return new LeafNode(metadata, bufferManager, page, keys, rids, sibling, treeContext);
     }
 
     // Builtins ////////////////////////////////////////////////////////////////
